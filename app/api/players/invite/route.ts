@@ -79,7 +79,7 @@ export async function POST(request: Request) {
 
     const { data: inviteData, error: inviteError } =
       await admin.auth.admin.inviteUserByEmail(email, {
-        redirectTo: new URL("/", request.url).toString(),
+      redirectTo: "https://diggy-poker-team.vercel.app/",
         data: { display_name: name },
       });
 
