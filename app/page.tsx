@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -21,6 +22,13 @@ type ClubRow = {
   name: string;
 };
 
+type PlayerRow = {
+  id: string;
+  display_name: string;
+  role: string;
+  created_at: string;
+};
+
 export default function Home() {
   const [supabase] = useState(() => createClient());
 
@@ -30,7 +38,14 @@ export default function Home() {
 
   const [rows, setRows] = useState<SessionRow[]>([]);
   const [clubs, setClubs] = useState<ClubRow[]>([]);
+  const [players, setPlayers] = useState<PlayerRow[]>([]);
+  const [profileRole, setProfileRole] = useState("");
   const [message, setMessage] = useState("");
+  const [loadingPlayers, setLoadingPlayers] = useState(false);
+  const [sendingInvite, setSendingInvite] = useState(false);
+
+  const [playerName, setPlayerName] = useState("");
+  const [playerEmail, setPlayerEmail] = useState("");
 
   const [date, setDate] = useState("2026-10-23");
   const [app, setApp] = useState("X-Poker");
@@ -45,6 +60,41 @@ export default function Home() {
     (item) => item.app_name === app
   );
 
+  async function loadPlayers() {
+    setLoadingPlayers(true);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+
+      if (!token) {
+        setPlayers([]);
+        return;
+      }
+
+      const response = await fetch("/api/players", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error ?? "Não foi possível carregar jogadores.");
+      }
+
+      setPlayers(result.players ?? []);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Erro ao carregar jogadores."
+      );
+    } finally {
+      setLoadingPlayers(false);
+    }
+  }
+
   async function refresh() {
     const { data: auth, error: authError } =
       await supabase.auth.getUser();
@@ -53,6 +103,8 @@ export default function Home() {
       setUser(null);
       setRows([]);
       setClubs([]);
+      setPlayers([]);
+      setProfileRole("");
       setClub("");
       return;
     }
@@ -61,7 +113,7 @@ export default function Home() {
 
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("team_id")
+      .select("team_id, role")
       .eq("id", auth.user.id)
       .single();
 
@@ -71,8 +123,11 @@ export default function Home() {
       );
       setRows([]);
       setClubs([]);
+      setPlayers([]);
       return;
     }
+
+    setProfileRole(profile.role ?? "");
 
     const { data: clubData, error: clubError } = await supabase
       .from("clubs")
@@ -98,6 +153,12 @@ export default function Home() {
       setMessage("Erro ao carregar lançamentos: " + error.message);
     } else {
       setRows((data ?? []) as SessionRow[]);
+    }
+
+    if (profile.role === "owner") {
+      await loadPlayers();
+    } else {
+      setPlayers([]);
     }
   }
 
@@ -157,6 +218,58 @@ export default function Home() {
     );
   }
 
+  async function invitePlayer(e: React.FormEvent) {
+    e.preventDefault();
+    setMessage("");
+
+    if (!playerName.trim() || !playerEmail.trim()) {
+      setMessage("Informe o nome e o e-mail do jogador.");
+      return;
+    }
+
+    setSendingInvite(true);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+
+      if (!token) {
+        throw new Error("Sua sessão expirou. Entre novamente.");
+      }
+
+      const response = await fetch("/api/players/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: playerName.trim(),
+          email: playerEmail.trim(),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error ?? "Não foi possível enviar o convite.");
+      }
+
+      setMessage(result.message ?? "Convite enviado com sucesso.");
+      setPlayerName("");
+      setPlayerEmail("");
+      await loadPlayers();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Erro inesperado ao enviar convite."
+      );
+    } finally {
+      setSendingInvite(false);
+    }
+  }
+
   async function saveSession(e: React.FormEvent) {
     e.preventDefault();
     setMessage("");
@@ -212,6 +325,8 @@ export default function Home() {
     setUser(null);
     setRows([]);
     setClubs([]);
+    setPlayers([]);
+    setProfileRole("");
     setClub("");
     setMessage("Você saiu da conta.");
   }
@@ -302,6 +417,86 @@ export default function Home() {
               Sair
             </button>
           </section>
+
+          {profileRole === "owner" && (
+            <section className="panel">
+              <h2>Gestão de jogadores</h2>
+              <p className="muted">
+                Convide jogadores para sua equipe. Eles receberão um e-mail
+                para concluir o acesso.
+              </p>
+
+              <form onSubmit={invitePlayer} className="form">
+                <label>
+                  Nome do jogador
+                  <input
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value)}
+                    required
+                    placeholder="Nome completo"
+                  />
+                </label>
+
+                <label>
+                  E-mail do jogador
+                  <input
+                    type="email"
+                    value={playerEmail}
+                    onChange={(e) => setPlayerEmail(e.target.value)}
+                    required
+                    placeholder="jogador@exemplo.com"
+                  />
+                </label>
+
+                <button type="submit" disabled={sendingInvite}>
+                  {sendingInvite ? "Enviando convite..." : "Convidar jogador"}
+                </button>
+              </form>
+
+              <div className="playerList">
+                <h3>Jogadores da equipe</h3>
+
+                {loadingPlayers ? (
+                  <p className="muted">Carregando jogadores...</p>
+                ) : players.length === 0 ? (
+                  <p className="muted">
+                    Nenhum perfil encontrado para esta equipe.
+                  </p>
+                ) : (
+                  <div className="tableWrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Nome</th>
+                          <th>Função</th>
+                          <th>Cadastro</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {players.map((player) => (
+                          <tr key={player.id}>
+                            <td>{player.display_name}</td>
+                            <td>
+                              {player.role === "owner"
+                                ? "Proprietário"
+                                : player.role === "manager"
+                                ? "Gerente"
+                                : "Jogador"}
+                            </td>
+                            <td>
+                              {new Date(player.created_at).toLocaleDateString(
+                                "pt-BR"
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           <section className="metrics">
             <div className="metric">
